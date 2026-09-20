@@ -1,6 +1,6 @@
 # Verification record — 2026-09-19
 
-All Python commands ran in the conda prefix `D:\个人简历\个人项目\.conda-safeops` (Python 3.12.14). No system Python environment was used.
+All Python commands ran in the conda prefix `.conda-safeops` (Python 3.12.14). No system Python environment was used.
 
 ## Executed checks
 

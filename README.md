@@ -104,15 +104,15 @@ docs/                审计、验证、本机配置和阅读指南
 本机 PostgreSQL 位于 `E:\PostgreSQL\17`，数据库服务端口为 `5432`；项目已配置 `.env`。由于另一个项目使用 `8000`，本机 SafeOps 使用 `8001`。
 
 ```powershell
-Set-Location 'D:\个人简历\个人项目\langgraph-production'
-conda activate 'D:\个人简历\个人项目\.conda-safeops'
+Set-Location 'langgraph-production'
+conda activate '.conda-safeops'
 safeops serve --port 8001
 ```
 
 另开终端启动前端：
 
 ```powershell
-Set-Location 'D:\个人简历\个人项目\langgraph-production\apps\web'
+Set-Location 'langgraph-production\apps\web'
 npm run dev
 ```
 

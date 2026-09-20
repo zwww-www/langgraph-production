@@ -14,13 +14,13 @@ PostgreSQL 已切换到用户安装的 Windows 服务：
 本机端口 8000 被 SalesPilot 使用，SafeOps 改用 8001，控制台仍为 http://127.0.0.1:3000。前端代理配置位于 `apps/web/.env.local`。这些本机配置文件不提交 Git；Compose 的默认容器配置不变。
 
 ```powershell
-Set-Location 'D:\个人简历\个人项目\langgraph-production'
-conda activate 'D:\个人简历\个人项目\.conda-safeops'
+Set-Location 'langgraph-production'
+conda activate '.conda-safeops'
 # DATABASE_URL 从 .env 自动读取
 safeops serve --port 8001
 
 # 另开终端启动前端
-Set-Location 'D:\个人简历\个人项目\langgraph-production\apps\web'
+Set-Location 'langgraph-production\apps\web'
 npm run dev
 ```
 
