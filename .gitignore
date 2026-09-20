@@ -1,0 +1,27 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+dist/
+build/
+*.egg-info/
+*.sqlite3
+*.db
+.DS_Store
+.coverage
+htmlcov/
+runs/
+.env
+.test-tmp*/
+.pytest-cache*/
+.ruff_cache/
+node_modules/
+.next/
+*.tsbuildinfo
+reports/
+.logs/
+
+# Machine-specific frontend configuration
+apps/web/.env.local

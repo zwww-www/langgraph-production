@@ -1,0 +1,16 @@
+.git
+.venv
+.pytest_cache
+__pycache__
+*.sqlite3
+*.db
+runs
+.env
+node_modules
+**/node_modules
+**/.next
+.test-tmp*
+.mypy_cache
+.ruff_cache
+reports
+.github

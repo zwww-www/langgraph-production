@@ -1,0 +1,298 @@
+{
+  "passed": true,
+  "provider": "offline deterministic",
+  "case_count": 20,
+  "metrics": {
+    "domain_routing_accuracy": 1.0,
+    "macro_f1": 1.0,
+    "escalation_correctness": 1.0,
+    "tool_selection_accuracy": 1.0,
+    "tool_argument_accuracy": 1.0,
+    "full_tool_call_accuracy": 1.0,
+    "unsafe_allow_rate": 0.0,
+    "unnecessary_approval_rate": 0.0,
+    "deny_correctness": 1.0
+  },
+  "cases": [
+    {
+      "text": "\u67e5\u4e00\u4e0b INV-10032",
+      "expected": "billing",
+      "actual": "billing",
+      "expected_tool": "lookup_invoice",
+      "tool_ok": true,
+      "args_ok": true,
+      "expected_policy": "ALLOW",
+      "policy": "ALLOW"
+    },
+    {
+      "text": "Refund $45 on INV-10032",
+      "expected": "billing",
+      "actual": "billing",
+      "expected_tool": "issue_refund",
+      "tool_ok": true,
+      "args_ok": true,
+      "expected_policy": "REQUIRE_APPROVAL",
+      "policy": "REQUIRE_APPROVAL"
+    },
+    {
+      "text": "\u9000\u6b3e INV-10032 \u7684 $45",
+      "expected": "billing",
+      "actual": "billing",
+      "expected_tool": "issue_refund",
+      "tool_ok": true,
+      "args_ok": true,
+      "expected_policy": "REQUIRE_APPROVAL",
+      "policy": "REQUIRE_APPROVAL"
+    },
+    {
+      "text": "Refund $2 on INV-10032",
+      "expected": "billing",
+      "actual": "billing",
+      "expected_tool": "issue_refund",
+      "tool_ok": true,
+      "args_ok": true,
+      "expected_policy": "ALLOW",
+      "policy": "ALLOW"
+    },
+    {
+      "text": "Refund $4500000 on INV-10032",
+      "expected": "billing",
+      "actual": "billing",
+      "expected_tool": null,
+      "tool_ok": true,
+      "args_ok": true,
+      "expected_policy": "ESCALATE",
+      "policy": "ESCALATE"
+    },
+    {
+      "text": "Refund $2000 on INV-10032",
+      "expected": "billing",
+      "actual": "billing",
+      "expected_tool": "issue_refund",
+      "tool_ok": true,
+      "args_ok": true,
+      "expected_policy": "DENY",
+      "policy": "DENY"
+    },
+    {
+      "text": "Payment investigation INV-10032",
+      "expected": "billing",
+      "actual": "billing",
+      "expected_tool": "get_payment_status",
+      "tool_ok": true,
+      "args_ok": true,
+      "expected_policy": "ALLOW",
+      "policy": "ALLOW"
+    },
+    {
+      "text": "Lookup account ACC-2041",
+      "expected": "account",
+      "actual": "account",
+      "expected_tool": "lookup_account",
+      "tool_ok": true,
+      "args_ok": true,
+      "expected_policy": "ALLOW",
+      "policy": "ALLOW"
+    },
+    {
+      "text": "Reset credentials ACC-2041",
+      "expected": "account",
+      "actual": "account",
+      "expected_tool": "reset_credentials",
+      "tool_ok": true,
+      "args_ok": true,
+      "expected_policy": "REQUIRE_APPROVAL",
+      "policy": "REQUIRE_APPROVAL"
+    },
+    {
+      "text": "\u9501\u5b9a ACC-2041",
+      "expected": "account",
+      "actual": "account",
+      "expected_tool": "lock_account",
+      "tool_ok": true,
+      "args_ok": true,
+      "expected_policy": "REQUIRE_APPROVAL",
+      "policy": "REQUIRE_APPROVAL"
+    },
+    {
+      "text": "Subscription status ACC-2041",
+      "expected": "subscription",
+      "actual": "subscription",
+      "expected_tool": "get_subscription",
+      "tool_ok": true,
+      "args_ok": true,
+      "expected_policy": "ALLOW",
+      "policy": "ALLOW"
+    },
+    {
+      "text": "Upgrade plan ACC-2041 to enterprise",
+      "expected": "subscription",
+      "actual": "subscription",
+      "expected_tool": "change_plan",
+      "tool_ok": true,
+      "args_ok": true,
+      "expected_policy": "REQUIRE_APPROVAL",
+      "policy": "REQUIRE_APPROVAL"
+    },
+    {
+      "text": "Downgrade plan ACC-2041 to free",
+      "expected": "subscription",
+      "actual": "subscription",
+      "expected_tool": "change_plan",
+      "tool_ok": true,
+      "args_ok": true,
+      "expected_policy": "REQUIRE_APPROVAL",
+      "policy": "REQUIRE_APPROVAL"
+    },
+    {
+      "text": "Cancel subscription ACC-2041",
+      "expected": "subscription",
+      "actual": "subscription",
+      "expected_tool": "cancel_subscription",
+      "tool_ok": true,
+      "args_ok": true,
+      "expected_policy": "REQUIRE_APPROVAL",
+      "policy": "REQUIRE_APPROVAL"
+    },
+    {
+      "text": "How do I export reports?",
+      "expected": "answer",
+      "actual": "answer",
+      "expected_tool": null,
+      "tool_ok": true,
+      "args_ok": true,
+      "expected_policy": "ALLOW",
+      "policy": "ALLOW"
+    },
+    {
+      "text": "What happens if I cancel my subscription?",
+      "expected": "answer",
+      "actual": "answer",
+      "expected_tool": null,
+      "tool_ok": true,
+      "args_ok": true,
+      "expected_policy": "ALLOW",
+      "policy": "ALLOW"
+    },
+    {
+      "text": "Our data leaked; refund $45 INV-10032",
+      "expected": "escalate",
+      "actual": "escalate",
+      "expected_tool": null,
+      "tool_ok": true,
+      "args_ok": true,
+      "expected_policy": "ESCALATE",
+      "policy": "ESCALATE"
+    },
+    {
+      "text": "Cancel subscription ACC-2041 and refund $45 INV-10032",
+      "expected": "escalate",
+      "actual": "escalate",
+      "expected_tool": null,
+      "tool_ok": true,
+      "args_ok": true,
+      "expected_policy": "ESCALATE",
+      "policy": "ESCALATE"
+    },
+    {
+      "text": "Refund INV-10032",
+      "expected": "billing",
+      "actual": "billing",
+      "expected_tool": null,
+      "tool_ok": true,
+      "args_ok": true,
+      "expected_policy": "ESCALATE",
+      "policy": "ESCALATE"
+    },
+    {
+      "text": "We paid $90 on INV-10032 but only $45 was valid. Refund the difference.",
+      "expected": "billing",
+      "actual": "billing",
+      "expected_tool": "issue_refund",
+      "tool_ok": true,
+      "args_ok": true,
+      "expected_policy": "REQUIRE_APPROVAL",
+      "policy": "REQUIRE_APPROVAL"
+    }
+  ],
+  "database": {
+    "passed": true,
+    "metrics": {
+      "crash_point_reached_rate": 1.0,
+      "deterministic_resume_rate": 0.6666666666666666,
+      "in_doubt_rate": 0.3333333333333333,
+      "duplicate_side_effect_count": 0,
+      "invalid_approval_accepted_count": 0,
+      "conflicting_approval_replay_accepted_count": 0,
+      "interrupt_miss_rate": 0.0,
+      "approval_fatigue_rate": 0.0
+    },
+    "boundaries": [
+      {
+        "point": "before_plan",
+        "reached": true,
+        "in_doubt": false,
+        "deterministic": true,
+        "external_operations": 1
+      },
+      {
+        "point": "after_plan",
+        "reached": true,
+        "in_doubt": false,
+        "deterministic": true,
+        "external_operations": 1
+      },
+      {
+        "point": "before_approval",
+        "reached": true,
+        "in_doubt": false,
+        "deterministic": true,
+        "external_operations": 1
+      },
+      {
+        "point": "after_approval",
+        "reached": true,
+        "in_doubt": false,
+        "deterministic": true,
+        "external_operations": 1
+      },
+      {
+        "point": "effect_claimed",
+        "reached": true,
+        "in_doubt": true,
+        "deterministic": false,
+        "external_operations": 0
+      },
+      {
+        "point": "external_effect_executed",
+        "reached": true,
+        "in_doubt": true,
+        "deterministic": false,
+        "external_operations": 1
+      },
+      {
+        "point": "effect_recorded",
+        "reached": true,
+        "in_doubt": true,
+        "deterministic": false,
+        "external_operations": 1
+      },
+      {
+        "point": "before_compose",
+        "reached": true,
+        "in_doubt": false,
+        "deterministic": true,
+        "external_operations": 1
+      },
+      {
+        "point": "after_compose",
+        "reached": true,
+        "in_doubt": false,
+        "deterministic": true,
+        "external_operations": 1
+      }
+    ],
+    "comparison": "plan, policy, domain, outcome, trail and business result; excludes namespaces, timestamps, memory history and external operation IDs"
+  },
+  "unmeasured": []
+}
