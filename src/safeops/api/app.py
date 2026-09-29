@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select, text
 
 from safeops.api.auth import principal
+from safeops.api.control import router as control_router
 from safeops.api.schemas import Record, ReplayInput, RunIdentity, RunInput, Status
 from safeops.approvals.service import DecisionInput
 from safeops.config import Settings
@@ -47,7 +48,8 @@ def create_app(settings: Settings | None = None, start_worker: bool = True) -> F
                     except asyncio.CancelledError:
                         pass
 
-    app = FastAPI(title="SafeOps Agent", lifespan=lifespan)
+    app = FastAPI(title="SafeOps Risk-Budgeted Control Plane", lifespan=lifespan)
+    app.include_router(control_router)
 
     def rt() -> Runtime:
         return app.state.runtime
@@ -67,6 +69,7 @@ def create_app(settings: Settings | None = None, start_worker: bool = True) -> F
             async with rt().db.sessions() as session:
                 await session.execute(text("SELECT 1 FROM agent_runs LIMIT 1"))
                 await session.execute(text("SELECT 1 FROM checkpoint_migrations LIMIT 1"))
+            await rt().deps.policy.active()
         except Exception as exc:
             raise HTTPException(503, "database or migrations unavailable") from exc
         return {"status": "ready"}

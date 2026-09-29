@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 [project]
 name = "safeops-agent"
 version = "0.1.0"
-description = "Durable operations agents with deterministic authorization"
+description = "Risk-budgeted control plane for autonomous business agents"
 requires-python = ">=3.12"
 dependencies = ["langgraph>=1.0,<2", "langgraph-checkpoint-postgres>=3,<4", "pydantic>=2.10,<3", "pydantic-settings>=2.7,<3", "fastapi>=0.115,<1", "uvicorn>=0.34,<1", "sqlalchemy[asyncio]>=2.0,<3", "alembic>=1.14,<2", "psycopg[binary,pool]>=3.2,<4", "httpx>=0.28,<1", "mcp>=1.12,<2"]
 [project.optional-dependencies]

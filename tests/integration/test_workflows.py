@@ -274,7 +274,33 @@ async def test_sensitive_tool_gate_registry(runtime):
 async def test_policy_rechecked_at_execution(runtime):
     run_id, result = await start(runtime)
     await runtime.deps.approvals.decide(result["interrupts"][0]["token"], ADMIN, "approve", "yes")
-    runtime.settings.policy_version = "changed"
+    from safeops.policy.control import CompileInput, ControlPlane, ReleaseInput
+    from safeops.risk.models import BusinessSLO
+
+    control = ControlPlane(runtime.db)
+    await control.put_slo(
+        BusinessSLO(
+            target_auto_resolution_rate=0,
+            p95_resolution_seconds=100000,
+            max_expected_loss_per_day_cents=100000000,
+            max_expected_loss_per_window_cents=1000000000,
+        ),
+        ADMIN,
+    )
+    dataset = await control.generate(2000, 42, ADMIN)
+    report = await control.compile(
+        CompileInput(source="synthetic", dataset_id=dataset["id"]), ADMIN
+    )
+    candidate = await control.candidate(report["recommended"])
+    await control.release(
+        candidate["id"],
+        ReleaseInput(
+            note="Reviewed changed policy",
+            diff_digest=candidate["diff_digest"],
+            expected_revision=candidate["base_revision"],
+        ),
+        ADMIN,
+    )
     with pytest.raises(Forbidden):
         await runtime.process(run_id)
     assert await count(runtime, run_id) == 0

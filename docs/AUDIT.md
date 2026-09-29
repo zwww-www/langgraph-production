@@ -1,3 +1,5 @@
+> 这是本次风险控制平面重构之前的历史验证记录；当前架构和验证结果以 README.md 与 VERIFICATION.md 为准。
+
 # Architecture audit and replacement record
 
 The starting checkout was commit `89d9079`. The repository had no local changes before this task.

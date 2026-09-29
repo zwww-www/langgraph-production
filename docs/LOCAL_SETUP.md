@@ -15,7 +15,7 @@ PostgreSQL 已切换到用户安装的 Windows 服务：
 
 ```powershell
 Set-Location 'langgraph-production'
-conda activate '.conda-safeops'
+conda activate 'D:\个人简历\个人项目\.conda-safeops'
 # DATABASE_URL 从 .env 自动读取
 safeops serve --port 8001
 
@@ -24,4 +24,4 @@ Set-Location 'langgraph-production\apps\web'
 npm run dev
 ```
 
-切换后验证：新 PostgreSQL 上迁移成功，77 项测试全部通过（23.31 秒）；`http://127.0.0.1:8001/ready` 返回 ready，前端代理可读取新演示库。测试使用独立 `safeops_test` 数据库。
+当前控制平面重构的验证与演示数据见 [VERIFICATION.md](VERIFICATION.md) 和 [risk-backtest.json](risk-backtest.json)。

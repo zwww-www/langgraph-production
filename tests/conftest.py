@@ -6,6 +6,7 @@ from sqlalchemy import text
 from safeops.asyncio_support import configure_loop
 from safeops.config import Settings
 from safeops.graph.runtime import Runtime
+from safeops.policy.registry import bootstrap
 from safeops.tools.local import seed_demo
 
 configure_loop()
@@ -33,6 +34,7 @@ async def settings():
                         + " RESTART IDENTITY CASCADE"
                     )
                 )
+        await bootstrap(runtime.db)
         await seed_demo(runtime.db)
     return config
 

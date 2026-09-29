@@ -20,4 +20,4 @@ async function proxy(request: NextRequest, context: { params: Promise<{path: str
     return Response.json({detail: "后端服务暂不可用，请稍后重试"}, {status: 502});
   }
 }
-export {proxy as GET, proxy as POST};
+export {proxy as GET, proxy as POST, proxy as PUT};

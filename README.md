@@ -1,408 +1,224 @@
-# SafeOps Agent
+# SafeOps — Risk-Budgeted Control Plane for Autonomous Business Agents
 
-基于 **LangGraph、FastAPI、PostgreSQL 和 Next.js** 的智能运营工作台，支持阿里云百炼真实模型调用、人工审批、持久化恢复、副作用防重与异常对账。
+SafeOps 是面向自主业务 Agent 的**风险预算控制平面**。它把业务损失预算、人工审核产能、处理时延和历史业务结果编译成确定性授权策略，先对历史 canonical actions 回放，再由管理员明确发布。LangGraph 运行时只执行数据库中已发布的不可变策略。
 
-用户用自然语言提交账务、账户或订阅请求，模型负责识别意图并提出工具调用计划，系统通过确定性策略决定是否执行、拒绝或交由人工审批。执行过程、模型用量、审批决定和工具回执均可在中文控制台查看。
+核心主线：**Business economics → constrained optimization → deterministic Agent authorization**。
 
-> 当前项目使用合成业务数据演示发票、账户和订阅操作。阿里云模型调用已经实际验证；业务工具尚未连接真实支付或账户系统。本项目是面向生产问题的工程参考实现，不代表已经完成生产部署。
+## 为什么需要它
 
-## 功能概览
+固定的“超过 $10 就人工审批”无法回答：每天允许承担多少预计错误退款损失？财务团队能否处理积压？扩大自动处理权限后，损失和时延会怎样变化？
 
-| 能力 | 实现方式 |
-| --- | --- |
-| 自然语言任务分派 | Supervisor 输出经过校验的业务领域与置信度 |
-| 领域隔离 | 账务、账户、订阅三个实际编译的 LangGraph 子图，各有独立提示词与工具目录 |
-| 确定性授权 | Policy Engine 根据工具、金额、风险和策略版本决定执行路径 |
-| 人工审批 | `interrupt` 挂起、持久化审批、授权角色校验和恢复执行 |
-| 副作用防重 | 稳定动作身份、幂等键、PostgreSQL 执行账本与已完成回执复用 |
-| 不确定结果处理 | `in_doubt` 状态与管理员显式对账，不将超时等同于失败 |
-| 故障恢复 | 官方 `AsyncPostgresSaver`、持久化任务队列及运行锁 |
-| 运行观测 | 数据库事件、SSE 时间线、模型 token 用量、耗时和检查点历史 |
-| 安全回放 | 从检查点创建独立模拟执行分支，使用模拟工具回执 |
-| 长期记忆 | 按客户保存结构化偏好、套餐信息及近期工单引用 |
-| 模型接入 | 阿里云百炼、通用 OpenAI 兼容协议、离线规则和 cassette |
-| 工具接入 | 本地合成业务工具、HTTP、MCP，均受固定工具白名单约束 |
+SafeOps 用可测量的历史结果和明确的业务约束回答这些问题。LLM 负责理解请求和规划工具调用；它不计算权限、不批准退款、不生成业务正确性的 ground truth。
 
-## 系统架构
+## 架构
 
 ```mermaid
 flowchart TD
-    UI[中文控制台 / API 客户端] --> API[FastAPI]
-    API --> Queue[PostgreSQL 持久化任务队列]
-    Queue --> Worker[异步 Worker]
-    Worker --> Supervisor[Supervisor 意图分派]
-    Supervisor --> Billing[账务子图]
-    Supervisor --> Account[账户子图]
-    Supervisor --> Subscription[订阅子图]
-    Supervisor --> Policy[确定性策略评估]
-    Billing --> Policy
-    Account --> Policy
-    Subscription --> Policy
-    Policy -->|允许| Execute[重新校验授权 / 执行账本 / 工具调用]
-    Policy -->|需要审批或转人工| Approval[人工审批 / interrupt]
-    Policy -->|拒绝或直接答复| Compose[生成答复]
-    Approval -->|批准业务动作| Execute
-    Approval -->|拒绝或人工接管| Compose
-    Execute --> Verify[回执验证]
-    Verify --> Compose
-    Compose --> End[结束]
-    API -.持久化事件 / SSE.-> UI
+    O[延迟业务结果 Business Outcomes] --> C[Wilson 风险校准]
+    S[业务 SLO / 风险预算 / 审核容量] --> P[确定性约束优化]
+    C --> P
+    P --> F[候选策略与可行前沿]
+    F --> B[历史 Action 回放与差异]
+    B --> H[管理员审核并发布]
+    H --> A[数据库中的不可变 Active Policy]
+    A --> R[LangGraph Runtime]
+    L[LLM 规划 → Canonical Action] --> R
+    R --> G[确定性授权 / 人工审批 / 执行时复核]
+    G --> E[Effect Ledger / 幂等执行 / 回执]
+    E --> V[独立即时后置条件验证]
+    V --> O
+    E --> Q[in_doubt → 显式对账]
 ```
 
-模型输出始终视为待验证的计划。Supervisor 不能直接调用业务工具；领域子图校验工具名称、参数结构和引用来源；执行节点再次核对动作身份、当前策略及审批记录。最终答复从已验证回执生成，不由模型随意宣称操作成功。
+控制平面在 `risk/` 和 `policy/`，运行时在 `graph/`、`approvals/`、`effects/`。只有 `policy/engine.py` 一套授权算法，没有旧阈值回退或双引擎。
 
-API 先保存任务再返回 `202`。进程内 Worker 从 PostgreSQL 读取任务，通过事务级 advisory lock 防止同一任务并发执行。进程退出后锁自动释放，重启可从检查点继续。当前单 Worker 逐个处理任务，多进程通过数据库锁协调；没有引入独立消息中间件。
+## 风险算法与真实字段
 
-### 默认业务策略
+退款特征只来自已验证的结构化 Action：工具类型、金额、金额桶。金额桶上界集中定义为 1000、2000、5000、10000、30000、100000 美分。客户资历、历史退款次数、客户等级和争议记录没有可靠的请求时点数据，因此明确标为 unavailable，不由 LLM 猜测。
 
-| 操作 | 默认处理 |
-| --- | --- |
-| 查询发票、支付状态、账户、订阅 | 允许只读查询，并校验客户归属 |
-| 退款金额 ≤ 1000 美分 | 允许自动处理 |
-| 1000 < 退款金额 ≤ 100000 美分 | 需要财务审批 |
-| 退款金额 > 100000 美分 | 拒绝 |
-| 重置凭据、锁定账户 | 需要安全角色审批 |
-| 变更套餐、取消订阅 | 需要运营角色审批 |
-| 低置信度、无法安全规划的请求 | 转人工处理 |
-
-阈值通过环境变量配置；管理员可满足所有审批角色。通过人工接管审批不会凭空生成一个业务动作。
-
-## 技术栈与目录
-
-- 后端：Python 3.12、异步 FastAPI、Pydantic、httpx。
-- 工作流：LangGraph、PostgreSQL checkpointer。
-- 数据库：PostgreSQL 17、SQLAlchemy Async、psycopg、Alembic。
-- 前端：Next.js 16、React 19、TypeScript。
-- 质量检查：pytest、Ruff、mypy、GitHub Actions。
+对每个金额分段，已知结果数为 n，incorrect / disputed / reversed 的数量为 k；unknown 不计入成功或失败。采用单侧 95% Wilson 上置信界：
 
 ```text
-src/safeops/
-├── api/             认证、HTTP 接口和 SSE
-├── graph/           Supervisor、领域子图、业务节点、Runtime 和 Worker
-├── domain/          数据模型、规范化动作身份与业务异常
-├── policy/          风险评估和确定性授权
-├── approvals/       审批请求、角色校验及防重放
-├── effects/         副作用账本、回执与对账
-├── tools/           工具注册表、本地业务、HTTP/MCP 适配器
-├── persistence/     数据库连接与应用表
-├── events/          持久化事件与结构化日志
-├── memory/          跨工单的结构化客户记忆
-├── llm/             真实模型、离线模型与 cassette
-└── evaluation/      路由、策略和故障恢复评估
-apps/web/            中文运营控制台
-migrations/          应用表迁移
-tests/              单元测试与 PostgreSQL 集成测试
-docs/                审计、验证、本机配置和阅读指南
+p = k / n, z = 1.6448536269514722
+U = [p + z²/(2n) + z√(p(1−p)/n + z²/(4n²))] / [1 + z²/n]
+n = 0 时 U = 1
+运行时 expected_loss_cents = ceil(U × exposure_cents)
 ```
 
-## 快速启动
+3 个样本、0 次失败不会被视为零风险。历史记录按到达时间切为 60% 训练、40% 验证；训练截止时间之后才观测到的结果被遮蔽为 unknown，避免未来信息泄漏。默认已知样本少于 30，或覆盖率低于 70% 的退款进入人工审核；硬拒绝边界优先。
 
-以下命令使用 PowerShell。Python 环境使用 conda。
+只优化退款的经济权限。账户安全和订阅写操作保留强制审核；只读工具没有财务敞口。业务结果、回执和即时后置条件相互独立。
 
-### 当前电脑：使用已配置环境
+## 编译器实际做了什么
 
-本机 PostgreSQL 位于 `E:\PostgreSQL\17`，数据库服务端口为 `5432`；项目已配置 `.env`。由于另一个项目使用 `8000`，本机 SafeOps 使用 `8001`。
+业务目标以不可变 `BusinessSLO` 快照持久化，包含按角色的审核容量。默认每日预算 50000 美分、7 日预算 350000 美分、自动处理目标 85%、整体 p95 目标 300 秒、财务审核容量 20 笔/小时。
 
-```powershell
-Set-Location 'langgraph-production'
-conda activate '.conda-safeops'
-safeops serve --port 8001
-```
+- **目标函数**：最小化验证集上每笔业务成本之和。AUTO 成本为 U×金额；REVIEW 为人工成本 + 保守审核时延×每秒延迟成本 + 可配置人工残余错误率×金额；DENY 为拒绝摩擦成本。默认残余错误率为 0，是明确假设。
+- **候选生成**：以硬拒绝金额的 `[0, .01, .02, .05, .1, .3, 1]` 为自动额度搜索网格，生成低、中、高风险的非递增额度组合；高风险人工额度搜索 `.3` 和 `1` 倍硬边界。风险段由 U≤.02、U≤.08、其余划分。默认网格产生 167 个候选，实际额度来自搜索结果。
+- **约束**：每日/滚动预计损失上界、人工产能、队列深度、队列 SLA、整体 p95、自动化目标、硬拒绝、敏感工具强制审批、风险及金额权限单调性。人工残余错误损失也计入预算。
+- **容量估计**：验证窗口至少 24 小时才使用观测到达率；审核时延至少 30 条观测才使用历史 p95。否则使用 SLO 中明确的保守回退值。时延取历史 p95 与“一小时需求+积压清空时间”的较大值；这是确定性容量近似，不声称是排队分布模型。审核比例≤5% 时，整体 p95 使用配置的自动处理时间。
+- **前沿**：在可行解中按预计损失上界、审核负载、自动率比较 Pareto 支配关系；经济成本最低的可行候选为推荐。相同目标的等价规则可能同时位于前沿。
+- **回放**：直接读取历史 Action 和结果，不重新规划，不调用 LLM；保存当前→候选与历史记录→候选两种转移统计，DENY→AUTO 独立统计。编译不会修改生效策略，无解时不会放宽目标。
 
-另开终端启动前端：
+这些估计依赖历史代表性、分段稳定性和结果覆盖率。人工审核过的历史及未执行的拒绝记录存在选择偏差；回放不是因果证明，不能声称知道已拒绝操作的反事实结果。Wilson 是分段概率区间，也不是整个投资组合损失的联合 95% 保证。
 
-```powershell
-Set-Location 'langgraph-production\apps\web'
-npm run dev
-```
+## 安全约束
 
-前端已通过 `apps/web/.env.local` 配置 `BACKEND_URL=http://127.0.0.1:8001`。若服务已经运行，无需重复启动。
+- LLM never authorizes；optimizer never executes；未发布候选不影响运行时。
+- 新库通过显式 `safeops migrate` 初始化保守策略。缺少生效策略、快照、发布记录或摘要不匹配时拒绝继续，不静默 AUTO。
+- 执行链：Action → 确定性特征 → 已发布校准 → 风险上界 → 已发布额度规则 → ALLOW / REQUIRE_APPROVAL / DENY。
+- 审批绑定 run/thread、客户、canonical action、完整策略及 revision；执行前重新获取生效策略。策略变化后必须新建请求并重新审核，不迁移旧审批。
+- 发布持有 PostgreSQL 排他 advisory lock；执行时授权和下游调用持有对应共享锁，避免复核到调用之间切换策略。
+- `thread_id = run_id`；官方 PostgreSQL checkpointer 保留中断与恢复。
+- 稳定 `run_id:action_id` 幂等键、数据库执行账本及下游幂等契约共同避免重复副作用。
+- 网络超时/结果不明进入 `in_doubt`，不会自动重试。管理员使用业务证据显式对账。
+- dry-run 不产生真实副作用、不产生业务结果、不污染历史校准。
+- 本地工具读取独立业务状态核验后置条件；不支持独立验证的 adapter 返回 unavailable。verified 不代表业务决策 correct。
+- Business outcome observation 支持相同请求幂等重放；unknown 可追加为一个最终结果，矛盾结果返回 409，保留原观察历史。结果来源只接受明确的人工审计/下游系统等，不自动从 LLM 文本推断。
 
-- 控制台：[http://127.0.0.1:3000](http://127.0.0.1:3000)
-- API 文档：[http://127.0.0.1:8001/docs](http://127.0.0.1:8001/docs)
-- 就绪检查：[http://127.0.0.1:8001/ready](http://127.0.0.1:8001/ready)
-- 演示管理员：`demo-admin`；演示运营账号：`demo-operator`。
+## 快速启动（Conda）
 
-### 新环境：安装与初始化
-
-准备 conda、Node.js 22、npm 和 PostgreSQL 17，然后在项目根目录执行：
+需要 PostgreSQL 17、Python 3.12、Node.js/npm。以下从项目根目录执行：
 
 ```powershell
 conda env create -f environment.yml
 conda activate safeops
-# 仅首次创建，不覆盖已有数据库连接和 Key
-if (-not (Test-Path .env)) { Copy-Item .env.example .env }
-```
-
-使用数据库管理员创建项目账号及数据库（`psql` 需加入 PATH，或使用安装目录下的完整路径）：
-
-```powershell
-psql -h 127.0.0.1 -p 5432 -U postgres -d postgres
-```
-
-进入 psql 后执行；账号已存在时跳过对应创建步骤：
-
-```sql
-CREATE ROLE safeops LOGIN;
-\password safeops
-CREATE DATABASE safeops OWNER safeops;
-CREATE DATABASE safeops_test OWNER safeops;
-\q
-```
-
-在 `.env` 中设置连接地址。示例中的密码需替换；若包含 URL 特殊字符，应进行 URL 编码。
-
-```dotenv
-DATABASE_URL=postgresql://safeops:YOUR_PASSWORD@127.0.0.1:5432/safeops
-ENVIRONMENT=development
-LLM_PROVIDER=offline
-```
-
-初始化并启动后端：
-
-```powershell
+Copy-Item .env.example .env
+# 编辑 .env 中 DATABASE_URL，目标数据库需要预先创建
 safeops migrate
 safeops demo --seed-only
 safeops serve --port 8001
 ```
 
-另开终端安装并启动前端：
+当前机器已有 Conda 前缀 `D:\个人简历\个人项目\.conda-safeops`；可使用 `conda activate` 加该绝对路径。PostgreSQL 安装在 `E:\PostgreSQL\17`，配置说明见 [LOCAL_SETUP.md](docs/LOCAL_SETUP.md)。不要覆盖已有 `.env`。
+
+另开终端启动中文控制台：
 
 ```powershell
 Set-Location apps/web
 npm ci
-# 仅首次创建；已有配置时直接检查其中的 BACKEND_URL
-if (-not (Test-Path .env.local)) {
-    Set-Content .env.local 'BACKEND_URL=http://127.0.0.1:8001' -Encoding utf8
-}
+$env:BACKEND_URL='http://127.0.0.1:8001'
 npm run dev
 ```
 
-`safeops migrate` 先运行 Alembic，再初始化官方 checkpointer 表；多个 Worker 启动前完成一次迁移即可。Windows 下应使用 `safeops serve`，它会设置 psycopg 异步连接所需的 Selector 事件循环。
+访问 http://127.0.0.1:3000 ，输入配置好的访问令牌。默认本地演示管理员令牌为 `demo-admin`；生产配置拒绝 demo 令牌。控制平面页面可编辑 SLO、生成历史、编译、比较候选和明确发布。
 
-### Docker Compose
-
-```powershell
-if (-not (Test-Path .env)) { Copy-Item .env.example .env }
-docker compose up --build
-```
-
-Compose 按顺序启动 PostgreSQL、迁移、种子数据、后端和前端；容器方式的后端映射为 `8000`，前端为 `3000`。请确保这些端口未被本机服务占用。Compose 会覆盖数据库地址，前端通过容器服务名访问后端。
-
-本机因未安装 Docker，尚未实际验证容器构建与启动。仓库提供了相应 CI 检查，但不把“已配置 CI”等同于“CI 已运行成功”。
-
-## 接入阿里云真实模型
-
-在本地 `.env` 中配置：
+真实 LLM 只参与规划。在忽略提交的 `.env` 中设置：
 
 ```dotenv
 LLM_PROVIDER=aliyun
 LLM_MODEL=qwen3.8-flash
 LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-LLM_API_KEY=YOUR_API_KEY
-LLM_TIMEOUT_SECONDS=60
-LLM_MAX_TOKENS=2048
+LLM_API_KEY=your-local-key
 ```
 
-上述地址是本项目已验证的接口地址；其他地域应使用与 Key 对应的地址。修改后重启后端。`.env` 已被 Git 忽略，不要将真实 Key 写入 README、示例文件、工单或日志。
+模型可用性取决于实际账户。Key 不进入前端、URL、报告或仓库。控制平面的校准、编译和回放不需要 Key。离线规划通过 `LLM_PROVIDER=offline` 启用；不会替代风险算法。
 
-阿里云适配器请求 JSON 输出，并发送 `enable_thinking=false`。配置缺失、接口失败、超时及输出不完整会报错，不自动重试、不悄悄切回离线模型。模型返回内容仍经过业务结构与权限校验。
+## 可复现演示
 
-| Provider | 用途 |
-| --- | --- |
-| `aliyun` | 阿里云百炼，额外设置关闭思考模式 |
-| `openai-compatible` | 显式配置的 HTTPS 兼容端点 |
-| `offline` | 可重复的离线规则，不访问模型服务 |
-
-真实模型参与路由和领域规划；授权、业务工具及回执答复仍由代码控制。日常提交请求会消耗模型额度，检查点模拟回放在需要重新规划时也可能调用模型。
-
-接口参考：[模型说明](https://help.aliyun.com/zh/model-studio/qwen3-8-flash)、[思考模式](https://help.aliyun.com/zh/model-studio/deep-thinking)。
-
-## 使用示例
-
-### 1. 查询发票
-
-在控制台输入客户 `CUS-001`，提交：
-
-> 请查询发票 INV-10032 的金额、付款状态和已退款金额，只查询，不修改数据。
-
-执行流程：任务分派 → 账务规划 → 策略评估 → `lookup_invoice` → 回执验证 → 完成。
-
-初始化数据中，这张发票总额为 90 美元、已付款、已退款 0 美元。执行过退款后，应以当前数据库回执为准。
-
-CLI 等价示例：
+默认命令只生成候选。`--release` 是管理员明确授权发布本次推荐候选；正常网页操作则先查看 diff 再点击发布。
 
 ```powershell
-safeops demo --ticket-id DEMO-LOOKUP --text '查询发票 INV-10032 的付款状态'
+$env:SAFEOPS_ADMIN_TOKEN='demo-admin'
+safeops risk-demo --count 100000 --seed 42 --output reports/risk-backtest.json
+# 审核报告后可单独发布选定候选：
+safeops release-policy --candidate <candidate-id>
+# 完整本地演示：生成、编译、明确发布、执行一笔 $2 退款
+safeops risk-demo --count 100000 --seed 42 --release --output reports/risk-backtest.json
 ```
 
-### 2. 人工审批退款
-
-提交：`退款 INV-10032 的 $45`。
-
-1. 模型提出退款计划，金额规范化为 `4500` 美分。
-2. 策略判定需要财务审批，运行进入“待审批”。
-3. 在“审批中心”查看动作、参数、风险与所需角色。
-4. 使用 `demo-admin` 填写理由并批准，Worker 读取持久化决定后恢复执行。
-5. 在运行详情查看工具回执。拒绝审批不会触发退款。
-
-`demo-operator` 无权批准财务操作。CLI 可显式批准合成演示动作：
+也支持拆开执行：
 
 ```powershell
-safeops demo --ticket-id DEMO-REFUND --text 'Refund $45 on INV-10032' --approve
+safeops generate-demo-history --count 100000 --seed 42
+safeops compile-policy --dataset <dataset-id>
+safeops run-policy-backtest --candidate <candidate-id>
+# 使用审核过的业务目标文件创建新的持久化 SLO 快照
+safeops compile-policy --dataset <dataset-id> --slo business-slo.json
 ```
 
-同一工单重复提交会复用运行；修改已有工单内容会被拒绝。新工单代表新的业务请求。种子初始化不会重置已有余额。
+`run-policy-backtest` 返回该不可变候选在编译时保存的回放结果；改变历史或 SLO 后应重新编译。未指定 dataset 的编译只读取运行时退款历史。risk-demo 的规划使用 offline，以排除 LLM 网络波动；实际执行经过完整 LangGraph 与 PostgreSQL 账本。本地工具操作的是项目演示业务数据库，不会调用真实支付网关。
 
-### 3. 故障恢复与对账
+### 2026-09-26 实际结果
 
-建议在独立演示或测试环境中执行，并暂停其他处理同一数据库任务的 Worker，以便观察故障边界：
+完整输出保存在 [risk-backtest.json](docs/risk-backtest.json)，数字由代码计算。该次生成、持久化、编译和发布用时 185.718 秒（不包含随后运行时示例）。
 
-```powershell
-safeops demo --ticket-id DEMO-CRASH --text 'Reset credentials ACC-2041' --approve --crash-at external_effect_executed
-```
+| 指标 | 结果 |
+|---|---:|
+| 历史 Action / 训练 / 验证 | 100000 / 60000 / 40000 |
+| 全部历史已知结果覆盖率 | 95.034% |
+| 训练截止时间内已知结果 | 50660 |
+| 候选 / 可行候选 | 167 / 60 |
+| 生效前自动率 → 候选自动率 | 0% → 98.0025% |
+| 候选审核率 / 拒绝率 | 1.9575% / 0.04% |
+| 每日损失点估计 / 上界 | $339.79 / $411.68 |
+| 每日风险预算 | $500 |
+| 7 日损失上界 / 预算 | $2881.73 / $3500 |
+| 审核需求 / 容量 | 1.3746 / 20 笔每小时 |
+| 审核容量占用 | 6.8732% |
+| 审核时延保守估计 / 整体 p95 | 247.44 秒 / 5 秒 |
+| 相对原策略 REVIEW→AUTO / DENY→AUTO | 39201 / 0 |
 
-该示例在合成业务操作完成后中断，关闭 Runtime 并用新连接恢复。由于最终回执尚未确认，运行进入 `in_doubt`，不会盲目重复调用工具。
+选中规则的低/中/高风险自动额度为 `[30000, 10000, 2000]` 美分，人工额度均为 100000 美分。该额度仍受已知样本、覆盖率、实际风险分段及单调约束限制。发布 revision 为 `12742b288021441d67af8ec2d469124b7aa5f92a3d5550999f53e0d79b693f99`。
 
-在“待对账操作”中核查下游结果并填写证据：
+随后 run `54c359e5cdbc4a7e8c20e9c6facc5edc` 的 $2 退款得到 ALLOW，风险上界为 0.00165839，保守预计损失向上取整为 1 美分，立即后置条件 verified。未伪造 delayed correct outcome。
 
-- **确认已执行**：必须提供已核实的结果回执；恢复时复用回执。
-- **确认未执行**：释放执行声明，允许使用原幂等键重试；若已有执行证据则拒绝此决定。
+## API
 
-也可使用 CLI 维护：
+全部控制接口位于 `/api/control`，使用已有 Bearer 身份认证和 Pydantic 模型。除 active 返回 PolicyDefinition，其余单对象返回 `{data: ...}`，列表返回该包装的列表。
 
-```powershell
-safeops reconcile --effect 'RUN_ID:ACTION_ID' --outcome not_performed --evidence '已按幂等键查询下游，确认无执行记录' --token demo-admin
-```
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET / PUT | `/slo` | 读取 / 管理员创建业务目标快照 |
+| POST | `/outcomes` | 财务或管理员记录延迟业务结果 |
+| GET | `/calibrations` | 校准样本、分段上界和窗口 |
+| POST | `/history` | 管理员生成隔离的演示历史 |
+| GET | `/datasets` | 数据集来源与摘要 |
+| POST | `/compile` | 校准、搜索、校验并持久化候选 |
+| GET | `/candidates` | 候选列表，支持 calibration_id 过滤 |
+| GET | `/candidates/{id}` | 候选、来源、约束与 diff 摘要 |
+| GET | `/candidates/{id}/diff` | 当前/候选与历史转移统计 |
+| GET | `/frontier` | 可行前沿，支持 calibration_id 过滤 |
+| POST | `/candidates/{id}/release` | 管理员按 diff_digest + expected_revision 发布 |
+| GET | `/active` | 唯一生效策略 |
+| GET | `/revisions` | 发布者、理由与历史摘要 |
+| GET | `/metrics` | 运行时预算、决策率、审核负载、结果及拒绝原因 |
+| GET | `/events` | 持久化控制事件 |
 
-只有真正核查过下游后才能确认结果。对账会排队恢复任务，需要运行中的 API Worker 继续处理。
+缺少身份 401、权限不足 403、对象缺失 404、过期候选/冲突观察/不可行发布 409、请求格式错误 422。SLO 或观察改变会使旧候选过期；不自动重新解释审核过的 diff。原有 `/api/runs`、审批、effect 对账、检查点和 SSE 接口保留；OpenAPI 位于后端 `/docs`。
 
-## 为什么需要执行账本
+## 数据库与升级
 
-**检查点恢复不等于外部副作用恰好执行一次。** 外部退款可能已经成功，而本地尚未保存检查点。直接重试节点可能重复退款。
+新增 `business_slos`、`risk_calibrations`、`history_datasets`、`action_history`、`business_outcomes`、`policy_candidates`、`policy_revisions`、`policy_releases`、`control_state`。容量嵌入不可变 SLO，风险分段嵌入校准快照，回放嵌入候选；FK 关联 SLO、校准、数据集、基线 revision、候选与发布，支持从发布追到历史窗口/摘要及 optimizer configuration。
 
-SafeOps 使用 `thread_id:action_id` 作为稳定操作键；动作身份来自客户、工单、工具、领域及规范化参数。先原子声明执行，再调用工具、记录执行证据并保存完成回执。
+快照与结果观察由数据库触发器禁止 UPDATE/DELETE；候选与发布带摘要校验。唯一索引保证每个 Action 只有一个最终非 unknown 结果。`action_history` 保存 canonical action、决策、revision，并补充回执/后置条件。`agent_events.run_id` 允许空值以复用现有事件表记录控制事件。
 
-| 故障位置 | 恢复处理 |
-| --- | --- |
-| 执行声明已保存，工具结果未知 | 进入 `in_doubt`，等待对账 |
-| 下游已执行，本地证据未保存 | 进入 `in_doubt`，核查下游 |
-| 执行证据已保存，完成回执缺失 | 保留证据，等待对账确认 |
-| 完成回执已保存，图检查点尚未保存 | 复用回执，不再次派发 |
+Alembic 迁移 `7216a16dfb8d` 和 `ec11ec3b5c44` 在原 schema 上升级。执行 `safeops migrate` 完成应用迁移、官方 checkpoint schema 设置和显式 bootstrap；已有生效策略不会被重置。原有执行记录不会被冒充为带已知业务结果的训练数据；升级前旧策略审批无法沿用，应新建审核请求。
 
-系统不声称提供跨任意外部服务的分布式 exactly-once。实际保证依赖下游的幂等、客户归属和业务限额契约。不同工单的语义重复也不能仅靠运行幂等键消除。
+每日 expected_loss_consumption 表示最近 24 小时自动授权的保守风险承诺，并非实际已发生损失；未收到业务结果不会当作成功。rolling 指标使用生效 SLO 的滚动窗口。编译保证历史投影满足约束，不承诺未来流量漂移下绝不超预算；发现变化后需重新编译审核，运行时不会因队列繁忙自行放宽权限。
 
-审批同样绑定线程、工单、客户、动作、相关状态、风险、角色和策略版本。完全相同的审批重放被接受，修改决定、审批人或理由会冲突。执行时再次核对策略，避免审批后权限状态变化。
+## 验证与开发
 
-## API 速查
-
-除健康检查外，业务 API 使用 `Authorization: Bearer <token>`；身份和角色由服务端映射，客户端不能通过请求体声明审批角色。
-
-| 方法与路径 | 用途 |
-| --- | --- |
-| `POST /api/tickets` | 创建不可变工单 |
-| `POST /api/runs` | 创建或复用运行并排队 |
-| `GET /api/runs`、`GET /api/runs/{id}` | 列表与运行状态 |
-| `GET /api/runs/{id}/state` | 当前持久化状态 |
-| `GET /api/runs/{id}/checkpoints` | 检查点历史 |
-| `GET /api/runs/{id}/events`、`/stream` | 历史事件与 SSE |
-| `POST /api/runs/{id}/resume` | 排队恢复，不接受任意状态或审批注入 |
-| `POST /api/runs/{id}/replay` | 从指定检查点创建模拟执行分支 |
-| `GET /api/approvals`、`GET /api/approvals/{token}` | 审批队列与详情 |
-| `POST /api/approvals/{token}/approve`、`/reject` | 提交审批决定 |
-| `GET /api/effects/in-doubt`、`GET /api/effects/{key}` | 待对账操作与账本详情 |
-| `POST /api/effects/{key}/reconcile` | 管理员对账 |
-| `GET /api/customers/{id}/memory` | 结构化客户记忆 |
-| `GET /health`、`GET /ready` | 存活与就绪状态 |
-
-SSE 使用持久化数字游标，支持 `after` 和 `Last-Event-ID`。前端通过 fetch 携带认证头读取流，不将令牌放入 URL。检查点分支会清除旧审批和回执；已有计划从策略节点重新评估，早期检查点重新路由或规划，空初始化检查点不可回放。
-
-## 测试与评估
-
-### 静态检查与单元测试
+所有 Python 操作在 Conda 环境中执行。测试必须使用独立、名称以 `_test` 结尾的数据库；fixture 会清空该测试库的应用表及检查点。
 
 ```powershell
-conda activate safeops
-ruff check src tests migrations
-ruff format --check src tests migrations
-mypy src/safeops
-pytest tests/unit -q
-```
-
-当前电脑请将环境激活命令替换为前文的 conda 绝对路径。测试使用模拟传输或离线模型，不需要真实模型调用。
-
-### PostgreSQL 完整测试
-
-在专门的终端设置独立测试数据库连接：
-
-```powershell
-$env:DATABASE_URL='postgresql://safeops:YOUR_PASSWORD@127.0.0.1:5432/safeops_test'
-$env:TEST_DATABASE_URL=$env:DATABASE_URL
+# 将 DATABASE_URL 临时指向测试库，先执行 safeops migrate
+$env:TEST_DATABASE_URL='postgresql://user:password@127.0.0.1:5432/safeops_test'
 $env:LLM_PROVIDER='offline'
-safeops migrate
-pytest -q
-safeops eval --database --json reports/evaluation.json
-```
-
-**集成测试会清空指定测试库中的应用和检查点数据。** 数据库名必须以 `_test` 结尾，禁止指向演示库或生产库。未配置 `TEST_DATABASE_URL` 时，相关集成测试会显式跳过。完成后关闭此终端，避免启动服务时误用测试库环境变量。
-
-```powershell
-# 无数据库的路由、工具参数与策略评估
-safeops eval
-
-# 前端类型检查与生产构建
+python -m pytest -q --basetemp=.test-tmp-local
+python -m ruff check src tests
+python -m ruff format --check src tests
+python -m mypy
+python -m alembic check
 Set-Location apps/web
-npm ci
+npm run typecheck
 npm run build
 ```
 
-`safeops eval` 的默认路由样例使用离线规则；`--database` 会另外执行真实图、审批和恢复流程，其 Runtime 读取模型配置。因此，复现离线指标时必须像上面一样显式设置 `LLM_PROVIDER=offline`。数据库评估拒绝外部工具绑定，并会写入合成业务和评估记录，应使用独立测试库。
+真实验证结果见 [VERIFICATION.md](docs/VERIFICATION.md)。Docker Compose 保留 PostgreSQL → migrate → seed → backend → frontend 的依赖关系；当前机器没有 Docker，未声称验证过容器启动。Compose 端口默认 8000，本机直接启动使用 8001。
 
-故障注入包含九个边界：规划前后、审批前后、声明执行后、外部执行后、执行证据记录后、答复生成前后。恢复比较覆盖领域、计划、策略、结果及节点轨迹；运行编号、时间和生成的下游操作编号不纳入语义一致性比较。
+阅读入口：[READING_GUIDE.md](docs/READING_GUIDE.md)。MIT License。
 
-### 已完成验证
+## 真实模型验收
 
-| 检查 | 实际结果 |
-| --- | --- |
-| 自动化测试 | 接入阿里云后 87 项通过 |
-| Ruff / mypy | 通过 |
-| Next.js 生产构建 / TypeScript | 通过 |
-| 新 PostgreSQL 安装迁移 | 通过 |
-| 浏览器操作 | 中文界面、查询、审批、回执、时间线、检查点模拟回放已验证 |
-| 离线 20 条样例 | 路由、宏平均 F1、完整工具调用准确率均为 1.0 |
-| 九点故障评估 | 6 个确定性完成，3 个预期待对账，重复外部操作为 0 |
-| 阿里云真实调用 | `qwen3.8-flash` 完成路由和工具规划，查询成功 |
-| Docker / 公共 MCP / 真实支付系统 | 尚未实际验证 |
-
-离线样例是与规则一起编写的小规模合成语料，不能代表真实模型或生产流量准确率。87 项自动化测试的结果也不等于真实模型全场景验收。
-
-最近一次展示案例运行编号为 `33b719629e6c4051a8f529cb15356d11`，查询 INV-10032，总耗时约 3.2 秒。两次真实模型调用分别使用 195 和 352 token，共 547 token；业务回执为已付款、总额 90 美元、已退款 0 美元。
-
-## 扩展与部署边界
-
-- **HTTP/MCP**：仅可将已登记工具绑定到运维配置的地址，模型不能选择服务器或扩展权限。下游必须接收客户范围和幂等键，并返回结构化回执。
-- **Cassette**：支持 `record`、`replay`、`strict_replay`；回放未命中直接失败。保存响应与提示摘要，不保存原始提示正文；单个文件使用单写入者。
-- **记忆与检查点**：记忆跨工单保存受限结构化信息，检查点负责单个工作流恢复；不会任意持久化模型生成的个人信息。
-- **认证**：默认 token 用于内部演示，生产模式拒绝默认演示 token。面向客户的多租户授权、SSO、限流、TLS、备份和故障切换需要另行建设。
-- **敏感信息**：常见密钥字段及模式会脱敏，但自由文本脱敏不是完整的个人信息识别系统。
-- **吞吐量**：已实现运行锁和持久化恢复，尚未完成多主机负载、数据库故障切换及生产容量验证。
-
-MCP 配置示例：
-
-```dotenv
-MCP_SERVERS={"ops":"http://localhost:9000/mcp"}
-TOOL_BINDINGS={"issue_refund":{"transport":"mcp","server":"ops","tool":"refund"}}
-```
-
-## 延伸阅读
-
-- [原项目审计与重构说明](docs/AUDIT.md)
-- [源码阅读顺序与面试讨论点](docs/READING_GUIDE.md)
-- [整体验证记录](docs/VERIFICATION.md)
-- [当前电脑的数据库和端口配置](docs/LOCAL_SETUP.md)
-- [阿里云真实调用验证](docs/ALIYUN_VERIFICATION.md)
-- [离线评估报告样例](docs/evaluation-example.json)
-
-## 许可证
-
-采用 [MIT License](LICENSE)，保留原项目版权和署名信息。
+2026-09-28 已使用用户 `.env` 中的 Key 对 `qwen3.8-flash` 完成真实端到端验收：付款查询、小额自动退款、强制人工审批、超额拒绝均通过。最终轮 8 次真实模型调用、1919 tokens，详见 [阿里云验收记录](docs/ALIYUN_VERIFICATION.md)。

@@ -13,6 +13,7 @@ from safeops.llm.offline import OfflineProvider
 from safeops.memory.service import CustomerMemory
 from safeops.observability.redaction import redact, redact_text
 from safeops.policy.engine import PolicyEngine
+from safeops.policy.registry import bootstrap_definition
 from safeops.tools.registry import RefundArgs, ToolRegistry
 
 TICKET = Ticket(id="T-1", customer_id="CUS-001", text="Refund $45 INV-10032")
@@ -57,8 +58,7 @@ def test_strict_router(raw):
     [("thread", "other"), ("amount", 6000), ("customer", "CUS-002"), ("policy", "next")],
 )
 def test_approval_binding(field, value):
-    config = Settings()
-    engine = PolicyEngine(config, ToolRegistry())
+    engine = PolicyEngine(bootstrap_definition(), ToolRegistry())
     base = request_for("run", TICKET, action(), engine.assess(action()))
     other_action = action(value) if field == "amount" else action()
     ticket = TICKET.model_copy(update={"customer_id": value}) if field == "customer" else TICKET
@@ -73,15 +73,18 @@ def test_approval_binding(field, value):
 @pytest.mark.parametrize(
     "amount,expected",
     [
-        (1, "ALLOW"),
-        (1000, "ALLOW"),
+        (1, "REQUIRE_APPROVAL"),
+        (1000, "REQUIRE_APPROVAL"),
         (1001, "REQUIRE_APPROVAL"),
         (4500, "REQUIRE_APPROVAL"),
         (100001, "DENY"),
     ],
 )
-def test_policy_thresholds(amount, expected):
-    assert PolicyEngine(Settings(), ToolRegistry()).assess(action(amount)).decision == expected
+def test_cold_start_policy(amount, expected):
+    assert (
+        PolicyEngine(bootstrap_definition(), ToolRegistry()).assess(action(amount)).decision
+        == expected
+    )
 
 
 @pytest.mark.parametrize(
@@ -94,7 +97,10 @@ def test_all_sensitive_actions_require_review(tool):
     if tool == "change_plan":
         args["plan"] = "pro"
     planned = Action.build(TICKET, tool, spec.validate(args), spec.domain)
-    assert PolicyEngine(Settings(), registry).assess(planned).decision == "REQUIRE_APPROVAL"
+    assert (
+        PolicyEngine(bootstrap_definition(), registry).assess(planned).decision
+        == "REQUIRE_APPROVAL"
+    )
 
 
 def test_domain_allowlist():

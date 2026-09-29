@@ -37,6 +37,7 @@ CASES = [
         domain="billing",
         tool="issue_refund",
         args={"invoice_ref": "INV-10032", "amount_cents": 200},
+        policy="REQUIRE_APPROVAL",
     ),
     Case(text="Refund $4500000 on INV-10032", domain="billing", policy="ESCALATE"),
     Case(

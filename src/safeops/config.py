@@ -15,9 +15,6 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(default=60, gt=0, le=300)
     llm_max_tokens: int = Field(default=2048, ge=128, le=8192)
     min_confidence: float = Field(default=0.7, ge=0, le=1)
-    refund_approval_cents: int = Field(default=1000, ge=0)
-    refund_deny_cents: int = Field(default=100000, gt=0)
-    policy_version: str = "2026-09-01"
     log_level: str = "INFO"
     api_tokens: dict[str, dict[str, str]] = Field(
         default_factory=lambda: {
@@ -33,8 +30,6 @@ class Settings(BaseSettings):
     def validate_settings(self) -> "Settings":
         if not self.database_url.startswith("postgresql://"):
             raise ValueError("DATABASE_URL must use postgresql://")
-        if self.refund_deny_cents <= self.refund_approval_cents:
-            raise ValueError("deny threshold must exceed approval threshold")
         if self.environment == "production" and (
             not self.api_tokens or any(k.startswith("demo-") for k in self.api_tokens)
         ):

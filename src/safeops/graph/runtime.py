@@ -23,7 +23,7 @@ from safeops.memory.service import Memory
 from safeops.observability.redaction import redact_text
 from safeops.persistence.database import Database, row_dict
 from safeops.persistence.models import ApprovalRow, RunRow, TicketRow
-from safeops.policy.engine import PolicyEngine
+from safeops.policy.registry import PolicyRegistry
 from safeops.tools.adapters import bind_external
 from safeops.tools.local import bind_local
 from safeops.tools.registry import ToolRegistry
@@ -59,7 +59,7 @@ class Runtime:
                 self.settings,
                 provider,
                 registry,
-                PolicyEngine(self.settings, registry),
+                PolicyRegistry(self.db, registry),
                 Approvals(self.db),
                 Effects(self.db, registry, self.faults),
                 Events(self.db),

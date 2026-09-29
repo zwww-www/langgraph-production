@@ -7,22 +7,32 @@ from safeops.domain.models import Action, Forbidden, Receipt, Ticket, ToolRefuse
 from safeops.graph.deps import Dependencies
 from safeops.graph.state import AgentState, trail
 from safeops.policy.models import ApprovalRequirement, PolicyDecision, RiskAssessment
+from safeops.risk.outcomes import record_action
+from safeops.tools.postconditions import verify_postcondition
 
 
 async def assess(state: AgentState, deps: Dependencies) -> dict:
     action = Action.model_validate(state["action"]) if state.get("action") else None
     if action:
-        policy = deps.policy.assess(action)
+        policy = await deps.policy.assess(action)
+        if not state.get("dry_run"):
+            await record_action(
+                deps.policy.db,
+                state["run_id"],
+                Ticket.model_validate(state["ticket"]),
+                action,
+                policy,
+            )
     elif state["domain"] == "answer" and not state.get("error"):
         policy = PolicyDecision(
             decision="ALLOW",
-            version=deps.settings.policy_version,
+            version=(await deps.policy.active()).revision,
             risk=RiskAssessment(score=0, level="low", reasons=["no business action"]),
         )
     else:
         policy = PolicyDecision(
             decision="ESCALATE",
-            version=deps.settings.policy_version,
+            version=(await deps.policy.active()).revision,
             requirement=ApprovalRequirement(role="operator"),
             risk=RiskAssessment(score=90, level="high", reasons=["human judgment required"]),
         )
@@ -70,14 +80,28 @@ async def human_gate(state: AgentState, deps: Dependencies) -> dict:
 
 
 async def execute(state: AgentState, deps: Dependencies) -> dict:
+    async with deps.policy.execution_guard():
+        return await execute_authorized(state, deps)
+
+
+async def execute_authorized(state: AgentState, deps: Dependencies) -> dict:
     action = Action.model_validate(state["action"])
     ticket = Ticket.model_validate(state["ticket"])
     # Defense in depth: the node independently enforces canonical identity and current policy.
     args = deps.registry.require(action.tool, state["domain"]).validate(action.args)
     if Action.build(ticket, action.tool, args, action.domain) != action:
         raise Forbidden("noncanonical action identity")
-    current = deps.policy.assess(action)
-    if current.model_dump() != state["policy"]:
+    current = await deps.policy.assess(action)
+    if current != PolicyDecision.model_validate(state["policy"]):
+        await deps.events.emit(
+            state["run_id"],
+            "runtime_policy_mismatch",
+            "execute",
+            {
+                "active_revision": current.version,
+                "approval_revision": state["policy"].get("version"),
+            },
+        )
         raise Forbidden("policy changed; create a new reviewed request")
     if current.decision not in ("ALLOW", "REQUIRE_APPROVAL"):
         raise Forbidden("policy denies execution")
@@ -119,6 +143,7 @@ async def execute(state: AgentState, deps: Dependencies) -> dict:
 
 
 async def verify(state: AgentState, deps: Dependencies) -> dict:
+    postcondition = {"verification_status": "unavailable", "reason": "no receipt"}
     if state.get("receipt"):
         receipt = Receipt.model_validate(state["receipt"])
         action = Action.model_validate(state["action"])
@@ -127,7 +152,10 @@ async def verify(state: AgentState, deps: Dependencies) -> dict:
         await deps.events.emit(
             state["run_id"], "receipt_verified", "verify", {"action_id": action.action_id}
         )
-    return {"trail": trail(state, "verify")}
+        postcondition = await verify_postcondition(
+            deps.policy.db, deps.settings, state["run_id"], action, receipt
+        )
+    return {"trail": trail(state, "verify"), "postcondition": postcondition}
 
 
 async def compose(state: AgentState, deps: Dependencies) -> dict:

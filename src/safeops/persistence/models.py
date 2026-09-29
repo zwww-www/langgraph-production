@@ -50,7 +50,7 @@ class RunRow(Base):
 class EventRow(Base):
     __tablename__ = "agent_events"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id"), index=True)
+    run_id: Mapped[str | None] = mapped_column(ForeignKey("agent_runs.id"), index=True)
     thread_id: Mapped[str] = mapped_column(String(64))
     event_type: Mapped[str] = mapped_column(String(60))
     node: Mapped[str] = mapped_column(String(60))
@@ -139,3 +139,119 @@ class ExternalOperationRow(Base):
     key: Mapped[str] = mapped_column(String(140), primary_key=True)
     result: Mapped[dict[str, Any]] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class SLORow(Base):
+    __tablename__ = "business_slos"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    definition: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    author: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class CalibrationRow(Base):
+    __tablename__ = "risk_calibrations"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    definition: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    source: Mapped[str] = mapped_column(String(32), index=True)
+    data_epoch: Mapped[int] = mapped_column(BigInteger)
+    sample_count: Mapped[int] = mapped_column(Integer)
+    dataset_id: Mapped[str | None] = mapped_column(ForeignKey("history_datasets.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class CandidateRow(Base):
+    __tablename__ = "policy_candidates"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    slo_id: Mapped[str] = mapped_column(ForeignKey("business_slos.id"))
+    calibration_id: Mapped[str] = mapped_column(ForeignKey("risk_calibrations.id"))
+    base_revision: Mapped[str] = mapped_column(
+        ForeignKey("policy_revisions.id", name="candidate_base_revision", use_alter=True)
+    )
+    source: Mapped[str] = mapped_column(String(32))
+    data_epoch: Mapped[int] = mapped_column(BigInteger)
+    feasible: Mapped[bool]
+    frontier: Mapped[bool]
+    result: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    result_digest: Mapped[str] = mapped_column(String(64))
+    optimizer: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class PolicyRevisionRow(Base):
+    __tablename__ = "policy_revisions"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    slo_id: Mapped[str] = mapped_column(ForeignKey("business_slos.id"))
+    calibration_id: Mapped[str] = mapped_column(ForeignKey("risk_calibrations.id"))
+    candidate_id: Mapped[str | None] = mapped_column(ForeignKey("policy_candidates.id"))
+    definition: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    digest: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ReleaseRow(Base):
+    __tablename__ = "policy_releases"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    revision_id: Mapped[str] = mapped_column(ForeignKey("policy_revisions.id"), unique=True)
+    principal: Mapped[str] = mapped_column(String(100))
+    note: Mapped[str] = mapped_column(Text)
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    diff_digest: Mapped[str] = mapped_column(String(64))
+    slo_digest: Mapped[str] = mapped_column(String(64))
+    calibration_digest: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ControlStateRow(Base):
+    __tablename__ = "control_state"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    slo_id: Mapped[str] = mapped_column(ForeignKey("business_slos.id"))
+    revision_id: Mapped[str] = mapped_column(ForeignKey("policy_revisions.id"))
+    data_epoch: Mapped[int] = mapped_column(BigInteger, default=0)
+
+
+class DatasetRow(Base):
+    __tablename__ = "history_datasets"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    seed: Mapped[int] = mapped_column(Integer)
+    count: Mapped[int] = mapped_column(Integer)
+    digest: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ActionHistoryRow(Base):
+    __tablename__ = "action_history"
+    id: Mapped[str] = mapped_column(String(140), primary_key=True)
+    run_id: Mapped[str | None] = mapped_column(ForeignKey("agent_runs.id"), index=True)
+    action_id: Mapped[str] = mapped_column(String(64), index=True)
+    dataset_id: Mapped[str | None] = mapped_column(ForeignKey("history_datasets.id"), index=True)
+    revision_id: Mapped[str | None] = mapped_column(ForeignKey("policy_revisions.id"))
+    customer_id: Mapped[str] = mapped_column(String(100))
+    tool: Mapped[str] = mapped_column(String(100), index=True)
+    action: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    features: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    decision: Mapped[str] = mapped_column(String(16))
+    expected_loss_cents: Mapped[int] = mapped_column(Integer)
+    review_latency_seconds: Mapped[float | None]
+    receipt: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    postcondition: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    arrived_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+
+
+class OutcomeRow(Base):
+    __tablename__ = "business_outcomes"
+    id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    history_id: Mapped[str] = mapped_column(ForeignKey("action_history.id"), index=True)
+    outcome: Mapped[str] = mapped_column(String(32))
+    realized_loss_cents: Mapped[int] = mapped_column(Integer)
+    source: Mapped[str] = mapped_column(String(40))
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    observer: Mapped[str] = mapped_column(String(100))
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    __table_args__ = (
+        Index(
+            "one_final_outcome", "history_id", unique=True, postgresql_where=(outcome != "unknown")
+        ),
+    )

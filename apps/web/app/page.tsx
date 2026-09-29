@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
+import ControlPlane from "./control";
 import { apiError, errorMessage, label } from "./zh";
 
 type Json = Record<string, unknown>;
@@ -14,7 +15,7 @@ function Badge({text}: {text: string}) { return <span className={`badge ${text}`
 
 export default function Dashboard() {
   const [token, setToken] = useState("");
-  const [tab, setTab] = useState("runs");
+  const [tab, setTab] = useState("control");
   const [runs, setRuns] = useState<Run[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [effects, setEffects] = useState<Effect[]>([]);
@@ -104,17 +105,18 @@ export default function Dashboard() {
   return <div className="shell">
     <aside><div className="brand"><span className="mark">S</span> SafeOps<span className="tiny">智能体</span></div>
       <p className="eyebrow">运营工作台</p>
-      {[ ["runs", "执行记录", runs.length], ["approvals", "审批中心", approvals.length], ["effects", "待对账操作", effects.length] ].map(([id, label, count]) =>
+      {[ ["control", "风险控制平面", ""], ["runs", "执行记录", runs.length], ["approvals", "审批中心", approvals.length], ["effects", "待对账操作", effects.length] ].map(([id, label, count]) =>
         <button className={`nav ${tab === id ? "active" : ""}`} key={id} onClick={() => setTab(String(id))}>{label}<span>{count}</span></button>)}
       <div className="sidebar-foot"><span className="dot"/> PostgreSQL 持久化执行<br/><small>人工授权，操作可追溯。</small></div>
     </aside>
-    <main><header><div><p className="eyebrow">控制台 / {label(tab)}</p><h1>{tab === "runs" ? "执行记录" : tab === "approvals" ? "审批中心" : "待对账操作"}</h1></div>
+    <main><header><div><p className="eyebrow">控制台 / {tab === "control" ? "风险控制平面" : label(tab)}</p><h1>{tab === "control" ? "风险控制平面" : tab === "runs" ? "执行记录" : tab === "approvals" ? "审批中心" : "待对账操作"}</h1></div>
       <div className="login"><input aria-label="访问令牌" type="password" placeholder="访问令牌" value={token} onChange={e => {setToken(e.target.value); setConnected(false);}}/>
         <button onClick={() => action(async () => {await refresh(); setConnected(true);})} disabled={busy || !token}>连接</button></div></header>
       {error && <div role="alert" className="error">{error}</div>}
       {!connected && <section className="card"><h2>连接运营工作台</h2><p>请输入已配置的访问令牌。本地演示可使用： <code>demo-admin</code> 或 <code>demo-operator</code>。令牌仅保存在当前标签页。</p></section>}
       {connected && <>
       <div className="stats"><section><small>执行总数</small><strong>{runs.length}</strong></section><section><small>待审批</small><strong>{approvals.length}</strong></section><section><small>待对账</small><strong>{effects.length}</strong></section><section><small>已完成</small><strong>{runs.filter(r => r.status === "completed").length}</strong></section></div>
+      {tab === "control" && <ControlPlane token={token}/> }
       {tab === "runs" && <>
         <section className="card"><h2>新建操作请求</h2><div className="request"><input aria-label="客户编号" value={customer} onChange={e => setCustomer(e.target.value)}/><input aria-label="操作请求" className="grow" value={message} onChange={e => setMessage(e.target.value)}/><button disabled={busy || !message} onClick={() => action(submit)}>开始执行 ↗</button></div><small>演示：客户 CUS-001 拥有发票 INV-10032 和账户 ACC-2041。可输入“退款 INV-10032 的 $45”。</small></section>
         <section className="card"><div className="section-title"><h2>最近执行记录</h2><button className="secondary" onClick={() => action(refresh)}>刷新</button></div><div className="table-scroll"><table><thead><tr><th>执行记录 / 工单</th><th>业务领域</th><th>状态</th><th>风险</th><th>开始时间</th><th>耗时</th></tr></thead><tbody>{runs.map(r => <tr key={r.id} className={selected === r.id ? "selected" : ""}><td><button className="link" onClick={() => setSelected(r.id)}>{r.id.slice(0, 12)} {r.dry_run && "[模拟执行]"}</button><small>{r.ticket_id}</small></td><td>{label(r.domain)}</td><td><Badge text={r.status}/></td><td>{label(r.risk?.level)}</td><td>{new Date(r.created_at).toLocaleString("zh-CN")}</td><td>{r.finished_at ? `${((+new Date(r.finished_at) - +new Date(r.created_at))/1000).toFixed(1)} 秒` : "—"}</td></tr>)}</tbody></table></div>{!runs.length && <p className="empty">暂无执行记录，请在上方提交请求。</p>}</section>

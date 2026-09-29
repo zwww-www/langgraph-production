@@ -12,6 +12,7 @@ class AgentState(TypedDict, total=False):
     policy: dict[str, Any]
     approval: dict[str, Any] | None
     receipt: dict[str, Any] | None
+    postcondition: dict[str, Any]
     outcome: str
     reply: str
     trail: list[str]

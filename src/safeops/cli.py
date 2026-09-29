@@ -13,12 +13,21 @@ from safeops.domain.models import Principal, Ticket
 from safeops.effects.reconcile import Resolution, reconcile
 from safeops.faults import CRASH_POINTS, Faults, SimulatedCrash
 from safeops.graph.runtime import Runtime
+from safeops.persistence.database import Database
+from safeops.policy.commands import register
+from safeops.policy.commands import run as control_command
+from safeops.policy.registry import bootstrap
 from safeops.tools.local import seed_demo
 
 
 async def checkpoint_setup(settings: Settings) -> None:
     async with AsyncPostgresSaver.from_conn_string(settings.database_url) as saver:
         await saver.setup()
+    db = Database(settings)
+    try:
+        await bootstrap(db)
+    finally:
+        await db.close()
 
 
 async def demo(settings: Settings, args: argparse.Namespace) -> None:
@@ -56,6 +65,7 @@ def main() -> None:
     configure_loop()
     parser = argparse.ArgumentParser(prog="safeops")
     commands = parser.add_subparsers(dest="command", required=True)
+    register(commands)
     serve = commands.add_parser("serve")
     serve.add_argument("--port", type=int, default=8000)
     commands.add_parser("migrate")
@@ -105,6 +115,8 @@ def main() -> None:
         args.json.write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(json.dumps(report, indent=2))
         raise SystemExit(0 if report["passed"] else 1)
+    elif args.command != "reconcile":
+        asyncio.run(control_command(settings, args))
     else:
 
         async def resolve() -> None:

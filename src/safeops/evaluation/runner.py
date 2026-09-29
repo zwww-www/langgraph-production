@@ -8,6 +8,7 @@ from safeops.llm.base import LLMRequest, Provider
 from safeops.llm.offline import OfflineProvider
 from safeops.persistence.models import EvaluationRow
 from safeops.policy.engine import PolicyEngine
+from safeops.policy.registry import bootstrap_definition
 from safeops.tools.registry import ToolRegistry
 
 
@@ -54,7 +55,7 @@ async def evaluate(
 ) -> dict[str, Any]:
     provider = provider or OfflineProvider()
     registry = ToolRegistry()
-    policy = PolicyEngine(settings, registry)
+    policy = PolicyEngine(bootstrap_definition(), registry)
     rows = []
     for index, case in enumerate(CASES):
         raw = await provider.complete(
